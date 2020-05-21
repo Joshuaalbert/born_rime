@@ -2,12 +2,11 @@
 Tests for optimize routines
 """
 
-from numpy.testing import assert_,  assert_array_almost_equal, assert_array_almost_equal_nulp
-import jax.numpy as np
+from numpy.testing import assert_, assert_array_almost_equal, assert_array_almost_equal_nulp
+import jax.numpy as jnp
 import numpy as onp
 from .line_search import line_search
 from .bfgs_minimize import bfgs_minimize
-
 
 
 def assert_wolfe(s, phi, derphi, c1=1e-4, c2=0.9, err_msg=""):
@@ -21,14 +20,13 @@ def assert_wolfe(s, phi, derphi, c1=1e-4, c2=0.9, err_msg=""):
     msg = "s = %s; phi(0) = %s; phi(s) = %s; phi'(0) = %s; phi'(s) = %s; %s" % (
         s, phi0, phi1, derphi0, derphi1, err_msg)
 
-    assert_(phi1 <= phi0 + c1*s*derphi0, "Wolfe 1 failed: " + msg)
-    assert_(abs(derphi1) <= abs(c2*derphi0), "Wolfe 2 failed: " + msg)
-
+    assert_(phi1 <= phi0 + c1 * s * derphi0, "Wolfe 1 failed: " + msg)
+    assert_(abs(derphi1) <= abs(c2 * derphi0), "Wolfe 2 failed: " + msg)
 
 
 def assert_line_wolfe(x, p, s, f, fprime, **kw):
-    assert_wolfe(s, phi=lambda sp: f(x + p*sp),
-                 derphi=lambda sp: np.dot(fprime(x + p*sp), p), **kw)
+    assert_wolfe(s, phi=lambda sp: f(x + p * sp),
+                 derphi=lambda sp: jnp.dot(fprime(x + p * sp), p), **kw)
 
 
 def assert_fp_equal(x, y, err_msg="", nulp=50):
@@ -38,43 +36,46 @@ def assert_fp_equal(x, y, err_msg="", nulp=50):
     except AssertionError as e:
         raise AssertionError("%s\n%s" % (e, err_msg))
 
+
 def value_and_grad(f, fprime):
     def func(x):
         return f(x), fprime(x)
+
     return func
+
 
 class TestLineSearch(object):
     # -- scalar functions; must have dphi(0.) < 0
     def _scalar_func_1(self, s):
         self.fcount += 1
-        p = -s - s**3 + s**4
-        dp = -1 - 3*s**2 + 4*s**3
+        p = -s - s ** 3 + s ** 4
+        dp = -1 - 3 * s ** 2 + 4 * s ** 3
         return p, dp
 
     def _scalar_func_2(self, s):
         self.fcount += 1
-        p = np.exp(-4*s) + s**2
-        dp = -4*np.exp(-4*s) + 2*s
+        p = jnp.exp(-4 * s) + s ** 2
+        dp = -4 * jnp.exp(-4 * s) + 2 * s
         return p, dp
 
     def _scalar_func_3(self, s):
         self.fcount += 1
-        p = -np.sin(10*s)
-        dp = -10*np.cos(10*s)
+        p = -jnp.sin(10 * s)
+        dp = -10 * jnp.cos(10 * s)
         return p, dp
 
     # -- n-d functions
 
     def _line_func_1(self, x):
         self.fcount += 1
-        f = np.dot(x, x)
-        df = 2*x
+        f = jnp.dot(x, x)
+        df = 2 * x
         return f, df
 
     def _line_func_2(self, x):
         self.fcount += 1
-        f = np.dot(x, np.dot(self.A, x)) + 1
-        df = np.dot(self.A + self.A.T, x)
+        f = jnp.dot(x, jnp.dot(self.A, x)) + 1
+        df = jnp.dot(self.A + self.A.T, x)
         return f, df
 
     # --
@@ -113,7 +114,7 @@ class TestLineSearch(object):
             while k < 9:
                 x = onp.random.randn(self.N)
                 p = onp.random.randn(self.N)
-                if np.dot(p, fprime(x)) >= 0:
+                if jnp.dot(p, fprime(x)) >= 0:
                     # always pick a descent direction
                     continue
                 k += 1
@@ -135,7 +136,6 @@ class TestLineSearch(object):
 
     # -- Generic line searches
 
-
     def test_line_search_wolfe2(self):
         c = 0
         smax = 512
@@ -153,9 +153,9 @@ class TestLineSearch(object):
             #                                                g0, f0, old_f,
             #                                                amax=smax)
             # assert_equal(self.fcount, fc+gc)
-            assert_array_almost_equal(fv, f(x + s*p), decimal=5)
+            assert_array_almost_equal(fv, f(x + s * p), decimal=5)
             if gv is not None:
-                assert_array_almost_equal(gv, fprime(x + s*p), decimal=5)
+                assert_array_almost_equal(gv, fprime(x + s * p), decimal=5)
             if s < smax:
                 c += 1
         assert_(c > 3)  # check that the iterator really works...
@@ -166,9 +166,9 @@ class TestLineSearch(object):
         # For this f and p, starting at a point on axis 0, the strong Wolfe
         # condition 2 is met if and only if the step length s satisfies
         # |x + s| <= c2 * |x|
-        f = lambda x: np.dot(x, x)
+        f = lambda x: jnp.dot(x, x)
         fp = lambda x: 2 * x
-        p = np.array([1, 0])
+        p = jnp.array([1, 0])
 
         # Smallest s satisfying strong Wolfe conditions for these arguments is 30
         x = -60 * p
@@ -207,10 +207,7 @@ class TestLineSearch(object):
         assert np.isclose(scipy_res[0], res.a_k)
         assert np.isclose(scipy_res[3], res.f_k)
 
-
-
     # -- More specific tests
-
 
 
 class TestBFGS(object):
@@ -219,55 +216,60 @@ class TestBFGS(object):
         import numpy as onp
 
         def compare(func, x0):
-
             # @jax.jit
             def min_op(x0):
-                result = bfgs_minimize(func(np), x0, options=dict(ls_maxiter=10, maxiter=10, analytic_initial_hessian=False, g_tol=1e-6))
+                result = bfgs_minimize(func(jnp), x0,
+                                       options=dict(ls_maxiter=10, maxiter=10, analytic_initial_hessian=False,
+                                                    g_tol=1e-6))
                 return result
-
 
             jax_res = min_op(x0)
 
             scipy_res = smin(func(onp), x0, method='BFGS')
             # print(jax_res)
             # print(scipy_res)
-            assert np.all(np.isclose(scipy_res.x, jax_res.x_k, atol=1e-5))
+            assert jnp.all(jnp.isclose(scipy_res.x, jax_res.x_k, atol=1e-5))
 
         def rosenbrock(np):
             def func(x):
                 return np.sum(100. * np.diff(x) ** 2 + (1. - x[:-1]) ** 2)
+
             return func
 
-        x0 = np.zeros(2)
+        x0 = jnp.zeros(2)
 
         compare(rosenbrock, x0)
 
         def himmelblau(np):
             def func(p):
-                x,y=p
-                return (x**2 + y - 11.)**2 + (x +y**2 - 7.)**2
+                x, y = p
+                return (x ** 2 + y - 11.) ** 2 + (x + y ** 2 - 7.) ** 2
+
             return func
 
-        x0 = np.zeros(2)
+        x0 = jnp.zeros(2)
 
-        compare(himmelblau,x0)
+        compare(himmelblau, x0)
 
         def matyas(np):
             def func(p):
-                x,y = p
-                return 0.26*(x**2 + y**2) - 0.48*x*y
+                x, y = p
+                return 0.26 * (x ** 2 + y ** 2) - 0.48 * x * y
+
             return func
 
-        x0 = np.ones(2)*6.
+        x0 = jnp.ones(2) * 6.
 
         compare(matyas, x0)
 
         def eggholder(np):
             def func(p):
-                x,y = p
-                return - (y + 47)*np.sin(np.sqrt(np.abs(x/2. + y+47.))) - x * np.sin(np.sqrt(np.abs(x - (y+47.))))
+                x, y = p
+                return - (y + 47) * np.sin(np.sqrt(np.abs(x / 2. + y + 47.))) - x * np.sin(
+                    np.sqrt(np.abs(x - (y + 47.))))
+
             return func
 
-        x0 = np.ones(2)*100.
+        x0 = jnp.ones(2) * 100.
 
         compare(eggholder, x0)
