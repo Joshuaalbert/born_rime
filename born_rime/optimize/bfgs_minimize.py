@@ -8,25 +8,26 @@ from jax.lax import while_loop
 from .line_search import line_search
 from typing import NamedTuple, Optional
 
+
 class BFGSResults(NamedTuple):
-        converged: bool  # bool, True if minimization converges
-        failed: bool  # bool, True if line search fails
-        k: int  # The number of iterations of the BFGS update.
-        nfev: int  # The total number of objective evaluations performed.
-        ngev: int  # total number of jacobian evaluations
-        nhev: int  # total number of hessian evaluations
-        x_k: jnp.ndarray # A tensor containing the last argument value found during the search. If the search converged,
-        # then this value is the argmin of the objective function.
-        f_k: jnp.ndarray  # A tensor containing the value of the objective
-        # function at the `position`. If the search
-        # converged, then this is the (local) minimum of
-        # the objective function.
-        g_k: jnp.ndarray  # A tensor containing the gradient of the objective function at the `final_position`.
-        # If the search converged the l2-norm of this tensor should be below the tolerance.
-        H_k: jnp.ndarray # A tensor containing the inverse of the estimated Hessian.
+    converged: bool  # bool, True if minimization converges
+    failed: bool  # bool, True if line search fails
+    k: int  # The number of iterations of the BFGS update.
+    nfev: int  # The total number of objective evaluations performed.
+    ngev: int  # total number of jacobian evaluations
+    nhev: int  # total number of hessian evaluations
+    x_k: jnp.ndarray  # A tensor containing the last argument value found during the search. If the search converged,
+    # then this value is the argmin of the objective function.
+    f_k: jnp.ndarray  # A tensor containing the value of the objective
+    # function at the `position`. If the search
+    # converged, then this is the (local) minimum of
+    # the objective function.
+    g_k: jnp.ndarray  # A tensor containing the gradient of the objective function at the `final_position`.
+    # If the search converged the l2-norm of this tensor should be below the tolerance.
+    H_k: jnp.ndarray  # A tensor containing the inverse of the estimated Hessian.
 
 
-def bfgs_minimize(func, x0, options=None, _nojit=False):
+def bfgs_minimize(func, x0, options=None):
     """
     The BFGS algorithm from
         Algorithm 6.1 from Wright and Nocedal, 'Numerical Optimization', 1999, pg. 136-143
@@ -55,10 +56,10 @@ def bfgs_minimize(func, x0, options=None, _nojit=False):
     Returns: BFGSResults
 
     """
+
     if options is None:
         options = dict()
     maxiter: Optional[int] = options.get('maxiter', None)
-    analytic_initial_hessian: bool = options.get('analytic_initial_hessian', False)
     g_tol: float = options.get('g_tol', 1e-5)
     ls_maxiter: int = options.get('ls_maxiter', 10)
 
@@ -78,17 +79,7 @@ def bfgs_minimize(func, x0, options=None, _nojit=False):
 
     D = x0.shape[0]
 
-    if analytic_initial_hessian:
-        hess = jax.hessian(func, argnums=0)
-        initial_B = hess(x0)
-        initial_H = jnp.linalg.pinv(initial_B)
-        # TODO: experimental, should remove
-        if jnp.any(jnp.linalg.eigvals(initial_B) <= 0):
-            initial_H = jnp.eye(D)
-        state = state._replace(nhev=state.nhev + 1)
-
-    else:
-        initial_H = jnp.eye(D)
+    initial_H = jnp.eye(D)
 
     value_and_grad = jax.value_and_grad(func)
 
@@ -99,7 +90,7 @@ def bfgs_minimize(func, x0, options=None, _nojit=False):
     def body(state):
         p_k = -jnp.dot(state.H_k, state.g_k)
         line_search_results = line_search(value_and_grad, state.x_k, p_k, f_0=state.f_k, g_0=state.g_k,
-                                          max_iterations=ls_maxiter, _nojit=_nojit)
+                                          max_iterations=ls_maxiter)
         state = state._replace(nfev=state.nfev + line_search_results.nfev,
                                ngev=state.ngev + line_search_results.ngev,
                                failed=line_search_results.failed)
@@ -127,13 +118,9 @@ def bfgs_minimize(func, x0, options=None, _nojit=False):
 
         return state
 
-    if _nojit:
-        while (~ state.converged) & (~state.failed) & (state.k < maxiter):
-            state = body(state)
-    else:
-        state = while_loop(
-            lambda state: (~ state.converged) & (~state.failed) & (state.k < maxiter),
-            body,
-            state)
+    state = while_loop(
+        lambda state: (~ state.converged) & (~state.failed) & (state.k < maxiter),
+        body,
+        state)
 
     return state

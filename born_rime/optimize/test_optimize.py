@@ -1,6 +1,9 @@
 """
 Tests for optimize routines
 """
+from jax.config import config
+
+config.update("jax_enable_x64", True)
 
 from numpy.testing import assert_, assert_array_almost_equal, assert_array_almost_equal_nulp
 import jax.numpy as jnp

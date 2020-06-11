@@ -16,7 +16,7 @@ class OptimizeResults(NamedTuple):
     nit: int  # Number of iterations of the optimization algorithm
 
 
-def minimize(fun, x0, *, method=None, tol=None, options=None, _nojit=False):
+def minimize(fun, x0, *, method=None, tol=None, options=None):
     """
     Interface to scalar function minimisation.
 
@@ -35,7 +35,7 @@ def minimize(fun, x0, *, method=None, tol=None, options=None, _nojit=False):
 
     """
     if method.lower() == 'bfgs':
-        results = bfgs_minimize(fun, x0, options=options, _nojit=_nojit)
+        results = bfgs_minimize(fun, x0, options=options)
         return OptimizeResults(x=results.x_k,
                                success=(results.converged) & (~results.failed),
                                status=results.failed,
@@ -46,4 +46,5 @@ def minimize(fun, x0, *, method=None, tol=None, options=None, _nojit=False):
                                nfev=results.nfev,
                                njev=results.ngev,
                                nit=results.k)
+
     raise ValueError("Method {} not recognised".format(method))
