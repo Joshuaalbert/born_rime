@@ -1,7 +1,8 @@
 import born_rime.variational_hmm
 from born_rime.optimize import minimize
-from born_rime.variational_hmm.utils import constrain_tec, deconstrain_tec, constrain_omega, deconstrain_omega, \
-    constrain_sigma, deconstrain_sigma
+from born_rime.variational_hmm.utils import constrain_std, deconstrain_std, constrain_tec, deconstrain_tec, \
+    constrain_omega, deconstrain_omega, \
+    constrain_sigma, deconstrain_sigma, scalar_KL
 from jax import numpy as jnp
 from jax import jit
 
@@ -57,6 +58,7 @@ class ForwardUpdateEquation(object):
         """
         return prior_mu, prior_Gamma
 
+
 class TecAmpsDiagSigmaDiagOmega(ForwardUpdateEquation):
     def __init__(self, freqs):
         self.freqs = freqs
@@ -78,8 +80,8 @@ class TecAmpsDiagSigmaDiagOmega(ForwardUpdateEquation):
 
         """
         amp = control_params[0]
-        phase = mu[0]*self.tec_conv
-        return jnp.concatenate([amp*jnp.cos(phase), amp*jnp.sin(phase)], axis=0)
+        phase = mu[0] * self.tec_conv
+        return jnp.concatenate([amp * jnp.cos(phase), amp * jnp.sin(phase)], axis=0)
 
     def E_update(self, prior_mu, prior_Gamma, Y, Sigma, *control_params):
         amp = control_params[0]
@@ -89,7 +91,7 @@ class TecAmpsDiagSigmaDiagOmega(ForwardUpdateEquation):
 
         def neg_elbo(params):
             mu, gamma = params
-            gamma = constrain_tec(gamma)
+            gamma = constrain_std(gamma)
             return self.neg_elbo(self.freqs, Y, sigma, amp, mu, gamma, prior_mu, prior_gamma)
 
         @jit
@@ -98,79 +100,31 @@ class TecAmpsDiagSigmaDiagOmega(ForwardUpdateEquation):
                               options=dict(ls_maxiter=100, g_tol=1e-6))
             return result.x
 
-        x0 = jnp.concatenate([prior_mu, deconstrain_tec(jnp.array([5.]))])
+        x0 = jnp.concatenate([prior_mu, deconstrain_std(prior_gamma)])
         x1 = do_minimisation(x0)
 
-        basin = jnp.mean(jnp.abs(jnp.pi / self.tec_conv)) * 0.5
-        num_basin = int(self.tec_scale / basin) + 1
+        # basin = jnp.mean(jnp.abs(jnp.pi / self.tec_conv)) * 0.5
+        # num_basin = int(self.tec_scale / basin) + 1
+        #
+        # obj_try = jnp.stack(
+        #     [neg_elbo(jnp.array([x1[0] + i * basin, x1[1]])) for i in range(-num_basin, num_basin + 1, 1)],
+        #     axis=0)
+        # which_basin = jnp.argmin(obj_try, axis=0)
+        # x0_next = jnp.array([x1[0] + (which_basin - float(num_basin)) * basin, x1[1]])
+        # x2 = do_minimisation(x0_next)
 
-        obj_try = jnp.stack(
-            [neg_elbo(jnp.array([x1[0] + i * basin, x1[1]])) for i in range(-num_basin, num_basin + 1, 1)],
-            axis=0)
-        which_basin = jnp.argmin(obj_try, axis=0)
-        x0_next = jnp.array([x1[0] + (which_basin - float(num_basin)) * basin, x1[1]])
-        x2 = do_minimisation(x0_next)
+        x2 = x1
 
         tec_mean = x2[0]
-        tec_uncert = constrain_tec(x2[1])
+        tec_uncert = constrain_std(x2[1])
 
-        post_mu = jnp.array([tec_mean], jnp.float64)
-        post_cov = jnp.array([[tec_uncert ** 2]], jnp.float64)
+        post_mu = jnp.array([tec_mean])
+        post_cov = jnp.array([[tec_uncert ** 2]])
 
         return post_mu, post_cov
 
-    def _M_update(self, post_mu_n1, post_Gamma_n1, post_mu_n, post_Gamma_n,
-                 Y, Sigma_n1, Omega_n1, **control_params):
-        amp = control_params.get('amp')
-
-        log_sigma0 = deconstrain_sigma(jnp.sqrt(jnp.diag(Sigma_n1)))
-        log_omega0 = deconstrain_omega(jnp.sqrt(jnp.diag(Omega_n1)))
-
-        post_gamma_n = jnp.sqrt(jnp.diag(post_Gamma_n))
-
-        def neg_elbo(params):
-            omega = constrain_omega(params[0:1])
-            sigma = constrain_sigma(params[1:])
-            prior_gamma_n = jnp.sqrt(jnp.diag(post_Gamma_n1) + omega ** 2)
-            prior_mu_n = post_mu_n1
-            ret = self.neg_elbo(self.freqs, Y, sigma, amp, post_mu_n, post_gamma_n, prior_mu_n, prior_gamma_n)
-            return ret
-
-        def do_minimisation(x0):
-            return minimize(neg_elbo, x0, method='BFGS',
-                            options=dict(ls_maxiter=100, maxiter=5, g_tol=1e-3)).x
-
-        x0 = jnp.concatenate([log_omega0, log_sigma0])
-        # x1 = do_minimisation(x0)
-        x1 = x0
-
-        omega = constrain_omega(x1[0:1])
-        sigma = constrain_sigma(x1[1:])
-
-        Omega = jnp.diag(omega ** 2)
-        Sigma = jnp.diag(sigma ** 2)
-
-        return Omega, Sigma
-
     def neg_elbo(self, freqs, Y_obs, sigma, amp, mu, gamma, mu_prior, gamma_prior):
-        return self.scalar_KL(mu, gamma, mu_prior, gamma_prior) - self.var_exp(freqs, Y_obs, sigma, amp, mu, gamma)
-
-    def scalar_KL(self, mu, gamma, prior_mu, prior_gamma):
-        """
-        mean, uncert : [M]
-        mean_prior,uncert_prior: [M]
-        :return: scalar
-        """
-        # Get KL
-        q_var = jnp.square(gamma)
-        var_prior = jnp.square(prior_gamma)
-        trace = q_var / var_prior
-        mahalanobis = jnp.square(mu - prior_mu) / var_prior
-        constant = -1.
-        logdet_qcov = jnp.log(var_prior) - jnp.log(q_var)
-        twoKL = mahalanobis + constant + logdet_qcov + trace
-        prior_KL = 0.5 * twoKL
-        return jnp.sum(prior_KL)
+        return scalar_KL(mu, gamma, mu_prior, gamma_prior) - self.var_exp(freqs, Y_obs, sigma, amp, mu, gamma)
 
     def var_exp(self, freqs, Y_obs, sigma, amp, mu, gamma):
         """
@@ -208,3 +162,146 @@ class TecAmpsDiagSigmaDiagOmega(ForwardUpdateEquation):
                 a ** 2 * Yreal * jnp.cos(phi) + b ** 2 * Yimag * jnp.sin(phi)))
         res *= 0.25
         return jnp.sum(res, axis=-1)
+
+
+class AmpDiagLinearPhaseDiagSigma(ForwardUpdateEquation):
+    def __init__(self, freqs):
+        self.freqs = freqs
+
+    @property
+    def num_control_params(self):
+        return 1
+
+    def _phase_basis(self, freqs):
+        """
+        Returns the linease phase basis as a function of freq.
+        Args:
+            freqs: [Nf] frequency
+
+        Returns:
+            [Nf, M] basis
+        """
+        raise NotImplementedError()
+
+    @property
+    def _phase_basis_size(self):
+        raise NotImplementedError()
+
+    def forward_model(self, mu, *control_params):
+        """
+        Return the model data.
+        Args:
+            mu: [K]
+
+        Returns:
+            Model data [N]
+
+        """
+        amp = control_params[0]
+        f = self._phase_basis(self.freqs)  # Nf,M
+        phase = jnp.dot(f, mu)  # Nf
+        return jnp.concatenate([amp * jnp.cos(phase), amp * jnp.sin(phase)], axis=0)
+
+    def E_update(self, prior_mu, prior_Gamma, Y, Sigma, *control_params):
+        amp = control_params[0]
+
+        sigma = jnp.sqrt(jnp.diag(Sigma))
+        prior_gamma = jnp.sqrt(jnp.diag(prior_Gamma))
+
+        def neg_elbo(params):
+            mu = params[:self._phase_basis_size]
+            gamma = constrain_std(params[self._phase_basis_size:])
+            return self.neg_elbo(self.freqs, Y, sigma, amp, mu, gamma, prior_mu, prior_gamma)
+
+        @jit
+        def do_minimisation(x0):
+            result = minimize(neg_elbo, x0, method='BFGS',
+                              options=dict(ls_maxiter=100, g_tol=1e-6))
+            return result.x
+
+        x0 = jnp.concatenate([prior_mu, deconstrain_std(prior_gamma)])
+        x1 = do_minimisation(x0)
+
+        post_mu = x1[:self._phase_basis_size]
+        post_gamma = constrain_std(x1[self._phase_basis_size:])
+        post_Gamma = jnp.diag(jnp.square(post_gamma))
+
+        return post_mu, post_Gamma
+
+    def neg_elbo(self, freqs, Y_obs, sigma, amp, mu, gamma, mu_prior, gamma_prior):
+        return scalar_KL(mu, gamma, mu_prior, gamma_prior) - self.var_exp(freqs, Y_obs, sigma, amp, mu, gamma)
+
+    def var_exp(self, freqs, Y_obs, sigma, amp, mu, gamma):
+        """
+        Computes variational expectation
+        Args:
+            freqs: [Nf]
+            Y_obs: [Nf]
+            sigma: [Nf]
+            amp: [Nf]
+            mu: [M]
+            gamma: [M]
+
+        Returns: scalar
+
+        """
+        f = self._phase_basis(self.freqs)  # Nf,M
+        Nf = freqs.size
+        Sigma_real = jnp.square(sigma[:Nf])
+        Sigma_imag = jnp.square(sigma[Nf:])
+        Yreal = Y_obs[:Nf]
+        Yimag = Y_obs[Nf:]
+
+        phi = jnp.dot(f, mu)
+        theta = 0.5 * jnp.dot(jnp.square(f), jnp.square(gamma))
+
+        var_exp = -2. * Nf * jnp.log(2. * jnp.pi)
+        var_exp -= jnp.sum(jnp.log(sigma))
+        var_exp -= (Yreal * (Yreal - 2. * amp * jnp.exp(-theta) * jnp.cos(phi))
+                    + 0.5 * jnp.square(amp) * (1. + jnp.exp(-2. * theta) * jnp.cos(2. * phi))) / Sigma_real
+        var_exp -= (Yimag * (Yimag - 2. * amp * jnp.exp(-theta) * jnp.sin(phi))
+                    + 0.5 * jnp.square(amp) * (1. - jnp.exp(-2. * theta) * jnp.cos(2. * phi))) / Sigma_imag
+
+        return 0.5 * jnp.sum(var_exp)
+
+class TecOnlyAmpDiagLinearPhaseDiagSigma(AmpDiagLinearPhaseDiagSigma):
+    def __init__(self, freqs):
+        super(TecOnlyAmpDiagLinearPhaseDiagSigma, self).__init__(freqs)
+        self.freqs = freqs
+        self.tec_conv = -8.4479745e6 / freqs
+
+    def _phase_basis(self, freqs):
+        """
+        Returns the linease phase basis as a function of freq.
+        Args:
+            freqs: [Nf] frequency
+
+        Returns:
+            [Nf, M] basis
+        """
+        return self.tec_conv[:, None]
+
+    @property
+    def _phase_basis_size(self):
+        return 1
+
+class TecClockAmpDiagLinearPhaseDiagSigma(AmpDiagLinearPhaseDiagSigma):
+    def __init__(self, freqs):
+        super(TecClockAmpDiagLinearPhaseDiagSigma, self).__init__(freqs)
+        self.freqs = freqs
+        self.tec_conv = -8.4479745e6 / freqs
+
+    def _phase_basis(self, freqs):
+        """
+        Returns the linease phase basis as a function of freq.
+        Args:
+            freqs: [Nf] frequency
+
+        Returns:
+            [Nf, M] basis
+        """
+        return jnp.concatenate([self.tec_conv[:, None], jnp.ones((freqs.shape[0], 1))/100.], axis=1)
+
+    @property
+    def _phase_basis_size(self):
+        return 2

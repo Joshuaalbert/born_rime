@@ -1,4 +1,10 @@
-import os
+import os, sys
+
+_VARIATIONAL_HMM_IMPORTED = False
+if ('jax' in sys.modules) and not _VARIATIONAL_HMM_IMPORTED:
+    raise ImportError("JAX was already imported, but this should be imported first to set device_count.")
+
+_VARIATIONAL_HMM_IMPORTED = True
 
 try:
     ncpu = os.cpu_count()
@@ -15,3 +21,6 @@ if jax.device_count('cpu') != ncpu:
 
 from jax.config import config
 config.update("jax_enable_x64", True)
+
+from born_rime.variational_hmm.nlds_smoother import NonLinearDynamicsSmoother
+from born_rime.variational_hmm.forward_update import TecAmpsDiagSigmaDiagOmega, TecOnlyAmpDiagLinearPhaseDiagSigma, TecClockAmpDiagLinearPhaseDiagSigma

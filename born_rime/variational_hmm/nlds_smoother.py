@@ -60,7 +60,8 @@ class NonLinearDynamicsSmoother(object):
             maxiter = jnp.inf
         if maxiter <= 0:
             raise ValueError("maxiter {} should be > 0".format(maxiter))
-        if tol < 0:
+        tol = jnp.array(tol)
+        if jnp.any(tol) < 0:
             raise ValueError("tol {} should be > 0".format(tol))
         omega_diag_range = (jnp.min(omega_diag_range), jnp.max(omega_diag_range))
         sigma_diag_range = (jnp.min(sigma_diag_range), jnp.max(sigma_diag_range))
@@ -98,9 +99,8 @@ class NonLinearDynamicsSmoother(object):
             Sigma_i = self.clip_covariance_diag(state.Sigma_i1 * momentum + (1. - momentum) * Sigma_i,
                                                 sigma_diag_range[0], sigma_diag_range[1])
 
-            max_norm = jnp.max(jnp.linalg.norm(state.post_mu - post_mu_b, axis=-1))
-            print(max_norm)
-            converged = (max_norm < tol) & (state.i > 0)
+            max_norm = jnp.max(jnp.linalg.norm(state.post_mu - post_mu_b, axis=-1), axis=0)
+            converged = jnp.all(max_norm < tol) & (state.i > 0)
 
             state = state._replace(done=converged,
                                    i=state.i + 1, post_mu=post_mu_b, post_Gamma=post_Gamma_b,

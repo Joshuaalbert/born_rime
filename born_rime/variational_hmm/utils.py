@@ -1,5 +1,6 @@
-from jax import numpy as jnp
+from jax import numpy as jnp, numpy as np
 from jax import vmap
+from jax.scipy.linalg import solve_triangular
 from jax.scipy.signal import _convolve_nd
 
 ###
@@ -12,6 +13,9 @@ from jax.tree_util import (tree_flatten, tree_unflatten)
 from jax.interpreters import pxla
 from jax.api import (AxisName, _check_callable, _TempAxisName, _mapped_axis_size, _check_args, _reshape_split,
                      _reshape_merge, pmap)
+
+
+
 
 def windowed_mean(a, w, mode='reflect'):
     dims = len(a.shape)
@@ -31,6 +35,12 @@ batched_multi_dot = vmap(jnp.linalg.multi_dot, 0, 0)
 
 def constrain(v, a, b):
     return a + (jnp.tanh(v) + 1) * (b - a) / 2.
+
+def constrain_std(v, vmin = 1e-3):
+    return jnp.abs(v) + vmin
+
+def deconstrain_std(v, vmin = 1e-3):
+    return jnp.maximum(v - vmin, 0.)
 
 
 def deconstrain(v, a, b):
@@ -107,3 +117,79 @@ def soft_pmap(fun: Callable, axis_name: Optional[AxisName] = None, *,
     namestr = "soft_pmap({}, axis_name={})".format
     f_pmapped.__name__ = namestr(f_pmapped.__name__, axis_name)
     return f_pmapped
+
+
+def scalar_KL(mean, uncert, mean_prior, uncert_prior):
+    """
+    mean, uncert : [M]
+    mean_prior,uncert_prior: [M]
+    :return: scalar
+    """
+    # Get KL
+    q_var = np.square(uncert)
+    var_prior = np.square(uncert_prior)
+    trace = q_var / var_prior
+    mahalanobis = np.square(mean - mean_prior) / var_prior
+    constant = -1.
+    logdet_qcov = np.log(var_prior / q_var)
+    twoKL = mahalanobis + constant + logdet_qcov + trace
+    prior_KL = 0.5 * twoKL
+    return np.sum(prior_KL)
+
+
+def mvn_kl(mu_a, L_a, mu_b, L_b):
+    def squared_frobenius_norm(x):
+        return np.sum(np.square(x))
+
+    b_inv_a = solve_triangular(L_b, L_a, lower=True)
+    kl_div = (
+            np.sum(np.log(np.diag(L_b))) - np.sum(np.log(np.diag(L_a))) +
+            0.5 * (-L_a.shape[-1] +
+                   squared_frobenius_norm(b_inv_a) + squared_frobenius_norm(
+                solve_triangular(L_b, mu_b[:, None] - mu_a[:, None], lower=True))))
+    return kl_div
+
+
+def fill_triangular(x, upper=False):
+    m = x.shape[-1]
+    if len(x.shape) != 1:
+        raise ValueError("Only handles 1D to 2D transformation, because tril/u")
+    m = np.int32(m)
+    n = np.sqrt(0.25 + 2. * m) - 0.5
+    if n != np.floor(n):
+        raise ValueError('Input right-most shape ({}) does not '
+                         'correspond to a triangular matrix.'.format(m))
+    n = np.int32(n)
+    final_shape = list(x.shape[:-1]) + [n, n]
+    if upper:
+        x_list = [x, np.flip(x[..., n:], -1)]
+
+    else:
+        x_list = [x[..., n:], np.flip(x, -1)]
+    x = np.reshape(np.concatenate(x_list, axis=-1), final_shape)
+    if upper:
+        x = np.triu(x)
+    else:
+        x = np.tril(x)
+    return x
+
+
+def fill_triangular_inverse(x, upper=False):
+    n = x.shape[-1]
+    n = np.int32(n)
+    m = np.int32((n * (n + 1)) // 2)
+    final_shape = list(x.shape[:-2]) + [m]
+    if upper:
+        initial_elements = x[..., 0, :]
+        triangular_portion = x[..., 1:, :]
+    else:
+        initial_elements = np.flip(x[..., -1, :], axis=-2)
+        triangular_portion = x[..., :-1, :]
+    rotated_triangular_portion = np.flip(
+        np.flip(triangular_portion, axis=-1), axis=-2)
+    consolidated_matrix = triangular_portion + rotated_triangular_portion
+    end_sequence = np.reshape(
+        consolidated_matrix,
+        list(x.shape[:-2]) + [n * (n - 1)])
+    y = np.concatenate([initial_elements, end_sequence[..., :m - n]], axis=-1)
+    return y
