@@ -27,7 +27,7 @@ class BFGSResults(NamedTuple):
     H_k: jnp.ndarray  # A tensor containing the inverse of the estimated Hessian.
 
 
-def bfgs_minimize(func, x0, options=None):
+def fmin_bfgs(func, x0, args=(), options=None):
     """
     The BFGS algorithm from
         Algorithm 6.1 from Wright and Nocedal, 'Numerical Optimization', 1999, pg. 136-143
@@ -37,21 +37,22 @@ def bfgs_minimize(func, x0, options=None):
             A side effect is that we perform more gradient evaluations than scipy's BFGS
         func: callable
             Function of the form f(x) where x is a flat ndarray and returns a real scalar. The function should be
-            composed of operations with vjp defined. If func is jittable then bfgs_minimize is jittable. If func is
+            composed of operations with vjp defined. If func is jittable then fmin_bfgs is jittable. If func is
             not jittable, then _nojit should be set to True.
 
         x0: ndarray
             initial variable
+        args: tuple, optional
+            Extra arguments to pass to func as func(x,*args)
         options: Optional dict of parameters
             maxiter: int
                 Maximum number of evaluations
-            g_tol: flat
-                Terminates minimization when |grad|_2 < g_tol
+            norm: float
+                Order of norm for convergence check. Default inf.
+            gtol: flat
+                Terminates minimization when |grad|_norm < g_tol
             ls_maxiter: int
                 Maximum number of linesearch iterations
-        _nojit: bool
-            Whether to use pythonic control flow so that func without XLA ops can be used. It is also very useful to
-            set _nojit=True in order to perform debugging.
 
     Returns: BFGSResults
 
@@ -60,7 +61,8 @@ def bfgs_minimize(func, x0, options=None):
     if options is None:
         options = dict()
     maxiter: Optional[int] = options.get('maxiter', None)
-    g_tol: float = options.get('g_tol', 1e-5)
+    norm: float = options.get('norm', jnp.inf)
+    gtol: float = options.get('gtol', 1e-5)
     ls_maxiter: int = options.get('ls_maxiter', 10)
 
     state = BFGSResults(converged=False,
@@ -75,22 +77,25 @@ def bfgs_minimize(func, x0, options=None):
                         H_k=None)
 
     if maxiter is None:
-        maxiter = jnp.inf
+        maxiter = jnp.size(x0) * 200
 
-    D = x0.shape[0]
+    d = x0.shape[0]
 
-    initial_H = jnp.eye(D)
+    initial_H = jnp.eye(d)
 
-    value_and_grad = jax.value_and_grad(func)
+    def func_with_args(x):
+        return func(x, *args)
+
+    value_and_grad = jax.value_and_grad(func_with_args)
 
     f_0, g_0 = value_and_grad(x0)
     state = state._replace(f_k=f_0, g_k=g_0, H_k=initial_H, nfev=state.nfev + 1, ngev=state.ngev + 1,
-                           converged=jnp.linalg.norm(g_0) < g_tol)
+                           converged=jnp.linalg.norm(g_0) < gtol)
 
     def body(state):
-        p_k = -jnp.dot(state.H_k, state.g_k)
-        line_search_results = line_search(value_and_grad, state.x_k, p_k, f_0=state.f_k, g_0=state.g_k,
-                                          max_iterations=ls_maxiter)
+        p_k = -(state.H_k @ state.g_k)
+        line_search_results = line_search(value_and_grad, state.x_k, p_k, old_fval=state.f_k, gfk=state.g_k,
+                                          maxiter=ls_maxiter)
         state = state._replace(nfev=state.nfev + line_search_results.nfev,
                                ngev=state.ngev + line_search_results.ngev,
                                failed=line_search_results.failed)
@@ -99,14 +104,14 @@ def bfgs_minimize(func, x0, options=None):
         f_kp1 = line_search_results.f_k
         g_kp1 = line_search_results.g_k
         y_k = g_kp1 - state.g_k
-        rho_k = jnp.reciprocal(jnp.dot(y_k, s_k))
+        rho_k = jnp.reciprocal(y_k @ s_k)
 
         sy_k = s_k[:, None] * y_k[None, :]
-        w = jnp.eye(D) - rho_k * sy_k
+        w = jnp.eye(d) - rho_k * sy_k
         H_kp1 = jnp.where(jnp.isfinite(rho_k),
-                          jnp.dot(jnp.dot(w, state.H_k), w.T) + rho_k * s_k[:, None] * s_k[None, :], state.H_k)
+                          jnp.linalg.multi_dot([w, state.H_k, w.T]) + rho_k * s_k[:, None] * s_k[None, :], state.H_k)
 
-        converged = jnp.linalg.norm(g_kp1) < g_tol
+        converged = jnp.linalg.norm(g_kp1, ord=norm) < gtol
 
         state = state._replace(converged=converged,
                                k=state.k + 1,

@@ -15,6 +15,16 @@ class LineSearchResults(NamedTuple):
     g_k: jnp.ndarray  # Final gradient value
 
 
+class BacktrackingState(NamedTuple):
+    failed: bool  # True if the strong Wolfe criteria were satisfied
+    nfev: int  # Number of functions evaluations
+    ngev: int  # Number of gradients evaluations
+    k: int  # Number of iterations
+    a_k: float  # Step size
+    f_k: jnp.ndarray  # Final function value
+    g_k: jnp.ndarray  # Final gradient value
+
+
 def line_search_backtracking(value_and_gradient, position, direction, f_0=None, g_0=None, max_iterations=50, c1=1e-4,
                              c2=0.9):
     """
@@ -42,15 +52,6 @@ def line_search_backtracking(value_and_gradient, position, direction, f_0=None, 
         return value_and_gradient(position + t * direction)
 
     grad_restricted = jax.grad(lambda t: restricted_func(t)[0])
-
-    BacktrackingState = NamedTuple('BacktrackingState',
-                                   [('failed', bool,),
-                                    ('nfev', int),
-                                    ('ngev', int),
-                                    ('k', int),
-                                    ('a_k', float),
-                                    ('f_k', jnp.ndarray),
-                                    ('g_k', jnp.ndarray)])
 
     state = BacktrackingState(failed=jnp.array(True), nfev=0, ngev=0, k=0, a_k=1., f_k=None, g_k=None)
     rho_neg = 0.8
@@ -109,28 +110,6 @@ def line_search_backtracking(value_and_gradient, position, direction, f_0=None, 
     return result
 
 
-def _cubic_interpolation(a_1, phi_1, dphi_1, a_2, phi_2, dphi_2):
-    """
-    Computes the cubic interpolation minimiser based on two previous evaluations of the
-    restricted function. It assumes that the minimum of the interpolation is in (a_1,a_2).
-
-    Args:
-        a_1: a previous step
-        phi_1: phi(a_1)
-        dphi_1: phi'(a_1)
-        a_2: a previous step not equal to a_1
-        phi_2: phi(a_2)
-        dphi_2: phi'(a_2)
-
-    Returns: a step minimising the cubic interpolant.
-
-    """
-    d1 = dphi_1 + dphi_2 - 3. * (phi_1 - phi_2) / (a_1 - a_2)
-    d2 = jnp.sign(a_2 - a_1) * jnp.sqrt(d1 ** 2 - dphi_1 * dphi_2)
-    a_3 = a_1 - (a_2 - a_1) * (dphi_2 + d2 - d1) / (dphi_2 - dphi_1 + 2. * d2)
-    return a_3
-
-
 def _cubicmin(a, fa, fpa, b, fb, c, fc):
     C = fpa
     db = b - a
@@ -155,14 +134,12 @@ def _quadmin(a, fa, fpa, b, fb):
     return xmin
 
 
-def _binary_replace(replace_bit, original_dict, new_dict, keys):
-    """
-    Similar to np.where, but fewer ops.
-    """
-    not_replace_bit = ~replace_bit
+def _binary_replace(replace_bit, original_dict, new_dict, keys=None):
+    if keys is None:
+        keys = new_dict.keys()
     out = dict()
     for key in keys:
-        out[key] = not_replace_bit * original_dict[key] + replace_bit * new_dict[key]
+        out[key] = jnp.where(replace_bit, new_dict[key], original_dict[key])
     return out
 
 
@@ -212,9 +189,11 @@ def _zoom(restricted_func_and_grad, wolfe_one, wolfe_two, a_lo, phi_lo, dphi_lo,
     delta1 = 0.2
     delta2 = 0.1
 
+    # TODO(albert): profile implementation using `cond` against this one. With cond fewer gradients _can_ be evaluated,
+    # but at what price to performance on an accelerator?
     def body(state):
         """
-        Body of zoom algorithm. We use boolean arithmatic to avoid using jax.cond so that it works on GPU/TPU.
+        Body of zoom algorithm. We use boolean arithmetic to avoid using jax.cond so that it works on GPU/TPU.
         """
         a = jnp.minimum(state.a_hi, state.a_lo)
         b = jnp.maximum(state.a_hi, state.a_lo)
@@ -254,8 +233,7 @@ def _zoom(restricted_func_and_grad, wolfe_one, wolfe_two, a_lo, phi_lo, dphi_lo,
                                                       phi_hi=phi_j,
                                                       dphi_hi=dphi_j,
                                                       a_rec=state.a_hi,
-                                                      phi_rec=state.phi_hi),
-                                                 ['a_hi', 'phi_hi', 'dphi_hi', 'a_rec', 'phi_rec']))
+                                                      phi_rec=state.phi_hi)))
 
         # for termination
         state = state._replace(done=star_to_j | state.done, **_binary_replace(star_to_j,
@@ -263,9 +241,7 @@ def _zoom(restricted_func_and_grad, wolfe_one, wolfe_two, a_lo, phi_lo, dphi_lo,
                                                                               dict(a_star=a_j,
                                                                                    phi_star=phi_j,
                                                                                    dphi_star=dphi_j,
-                                                                                   g_star=g_j),
-                                                                              ['a_star', 'phi_star', 'dphi_star',
-                                                                               'g_star']))
+                                                                                   g_star=g_j)))
 
         state = state._replace(**_binary_replace(hi_to_lo,
                                                  state._asdict(),
@@ -273,8 +249,7 @@ def _zoom(restricted_func_and_grad, wolfe_one, wolfe_two, a_lo, phi_lo, dphi_lo,
                                                       phi_hi=phi_lo,
                                                       dphi_hi=dphi_lo,
                                                       a_rec=state.a_hi,
-                                                      phi_rec=state.phi_hi),
-                                                 ['a_hi', 'phi_hi', 'dphi_hi', 'a_rec', 'phi_rec']))
+                                                      phi_rec=state.phi_hi)))
 
         state = state._replace(**_binary_replace(lo_to_j,
                                                  state._asdict(),
@@ -282,8 +257,7 @@ def _zoom(restricted_func_and_grad, wolfe_one, wolfe_two, a_lo, phi_lo, dphi_lo,
                                                       phi_lo=phi_j,
                                                       dphi_lo=dphi_j,
                                                       a_rec=state.a_lo,
-                                                      phi_rec=state.phi_lo),
-                                                 ['a_lo', 'phi_lo', 'dphi_lo', 'a_rec', 'phi_rec']))
+                                                      phi_rec=state.phi_lo)))
 
         state = state._replace(j=state.j + 1)
         return state
@@ -295,7 +269,7 @@ def _zoom(restricted_func_and_grad, wolfe_one, wolfe_two, a_lo, phi_lo, dphi_lo,
     return state
 
 
-def line_search(value_and_gradient, position, direction, f_0=None, g_0=None, max_iterations=50, c1=1e-4,
+def line_search(value_and_gradient, position, direction, old_fval=None, gfk=None, maxiter=10, c1=1e-4,
                 c2=0.9):
     """
     Inexact line search that satisfies strong Wolfe conditions.
@@ -311,14 +285,13 @@ def line_search(value_and_gradient, position, direction, f_0=None, g_0=None, max
             variable value to start search from.
         direction: ndarray
             direction to search in. Assumes the direction is a descent direction.
-        f_0, g_0: ndarray, optional
+        old_fval, gfk: ndarray, optional
             initial value of value_and_gradient as position.
-        max_iterations: int
+        maxiter: int
             maximum number of iterations to search
         c1, c2: Wolfe criteria constant, see ref.
 
     Returns: LineSearchResults
-
     """
 
     def restricted_func_and_grad(t):
@@ -339,11 +312,11 @@ def line_search(value_and_gradient, position, direction, f_0=None, g_0=None, max
                                   ('phi_star', float),
                                   ('dphi_star', float),
                                   ('g_star', jnp.ndarray)])
-    if f_0 is None or g_0 is None:
-        phi_0, dphi_0, g_0 = restricted_func_and_grad(0.)
+    if old_fval is None or gfk is None:
+        phi_0, dphi_0, gfk = restricted_func_and_grad(0.)
     else:
-        phi_0 = f_0
-        dphi_0 = jnp.dot(g_0, direction)
+        phi_0 = old_fval
+        dphi_0 = jnp.dot(gfk, direction)
 
     def wolfe_one(a_i, phi_i):
         # actually negation of W1
@@ -359,12 +332,12 @@ def line_search(value_and_gradient, position, direction, f_0=None, g_0=None, max
                             a_i1=0.,
                             phi_i1=phi_0,
                             dphi_i1=dphi_0,
-                            nfev=1 if (f_0 is None or g_0 is None) else 0,
-                            ngev=1 if (f_0 is None or g_0 is None) else 0,
+                            nfev=1 if (old_fval is None or gfk is None) else 0,
+                            ngev=1 if (old_fval is None or gfk is None) else 0,
                             a_star=0.,
                             phi_star=phi_0,
                             dphi_star=dphi_0,
-                            g_star=g_0)
+                            g_star=gfk)
 
     def body(state):
         # no amax in this version, we just double as in scipy.
@@ -391,7 +364,7 @@ def line_search(value_and_gradient, position, direction, f_0=None, g_0=None, max
                       a_i,
                       phi_i,
                       dphi_i,
-                      g_0,
+                      gfk,
                       ~star_to_zoom1)
 
         state = state._replace(nfev=state.nfev + zoom1.nfev,
@@ -406,7 +379,7 @@ def line_search(value_and_gradient, position, direction, f_0=None, g_0=None, max
                       state.a_i1,
                       state.phi_i1,
                       state.dphi_i1,
-                      g_0,
+                      gfk,
                       ~star_to_zoom2)
 
         state = state._replace(nfev=state.nfev + zoom2.nfev,
@@ -438,7 +411,7 @@ def line_search(value_and_gradient, position, direction, f_0=None, g_0=None, max
         state = state._replace(i=state.i + 1, a_i1=a_i, phi_i1=phi_i, dphi_i1=dphi_i)
         return state
 
-    state = while_loop(lambda state: (~state.done) & (state.i <= max_iterations) & (~state.failed),
+    state = while_loop(lambda state: (~state.done) & (state.i <= maxiter) & (~state.failed),
                        body,
                        state)
 
