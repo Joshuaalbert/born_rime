@@ -1,5 +1,5 @@
 from jax import numpy as jnp, numpy as np
-from jax import vmap
+from jax import vmap, jacobian
 from jax.scipy.linalg import solve_triangular
 from jax.scipy.signal import _convolve_nd
 
@@ -18,6 +18,9 @@ from jax.api import (AxisName, _check_callable, _TempAxisName, _mapped_axis_size
 
 
 def windowed_mean(a, w, mode='reflect'):
+    if w is None:
+        T = a.shape[0]
+        return jnp.broadcast_to(jnp.mean(a, axis=0, keepdims=True), a.shape)
     dims = len(a.shape)
     a = a
     kernel = jnp.reshape(jnp.ones(w)/w, [w]+[1]*(dims-1))
@@ -193,3 +196,48 @@ def fill_triangular_inverse(x, upper=False):
         list(x.shape[:-2]) + [n * (n - 1)])
     y = np.concatenate([initial_elements, end_sequence[..., :m - n]], axis=-1)
     return y
+
+def polyfit(x, y, deg):
+    """
+    x : array_like, shape (M,)
+        x-coordinates of the M sample points ``(x[i], y[i])``.
+    y : array_like, shape (M,) or (M, K)
+        y-coordinates of the sample points. Several data sets of sample
+        points sharing the same x-coordinates can be fitted at once by
+        passing in a 2D-array that contains one dataset per column.
+    deg : int
+        Degree of the fitting polynomial
+    Returns
+    -------
+    p : ndarray, shape (deg + 1,) or (deg + 1, K)
+        Polynomial coefficients, highest power first.  If `y` was 2-D, the
+        coefficients for `k`-th data set are in ``p[:,k]``.
+    """
+    order = int(deg) + 1
+    if deg < 0:
+        raise ValueError("expected deg >= 0")
+    if x.ndim != 1:
+        raise TypeError("expected 1D vector for x")
+    if x.size == 0:
+        raise TypeError("expected non-empty vector for x")
+    if y.ndim < 1 or y.ndim > 2:
+        raise TypeError("expected 1D or 2D array for y")
+    if x.shape[0] != y.shape[0]:
+        raise TypeError("expected x and y to have same length")
+    rcond = len(x) * jnp.finfo(x.dtype).eps
+    lhs = jnp.stack([x ** (deg - i) for i in range(order)], axis=1)
+    rhs = y
+    scale = jnp.sqrt(jnp.sum(lhs * lhs, axis=0))
+    lhs /= scale
+    c, resids, rank, s = jnp.linalg.lstsq(lhs, rhs, rcond)
+    c = (c.T / scale).T  # broadcast scale coefficients
+    return c
+
+
+def value_and_jacobian(fun):
+    jac = jacobian(fun)
+
+    def f(x, *control_params):
+        return fun(x, *control_params), jac(x, *control_params)
+
+    return f

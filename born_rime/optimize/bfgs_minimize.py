@@ -82,6 +82,7 @@ def fmin_bfgs(func, x0, args=(), options=None):
     d = x0.shape[0]
 
     initial_H = jnp.eye(d)
+    initial_H = options.get('hess_inv', initial_H)
 
     def func_with_args(x):
         return func(x, *args)
@@ -90,7 +91,7 @@ def fmin_bfgs(func, x0, args=(), options=None):
 
     f_0, g_0 = value_and_grad(x0)
     state = state._replace(f_k=f_0, g_k=g_0, H_k=initial_H, nfev=state.nfev + 1, ngev=state.ngev + 1,
-                           converged=jnp.linalg.norm(g_0) < gtol)
+                           converged=jnp.linalg.norm(g_0, ord=norm) < gtol)
 
     def body(state):
         p_k = -(state.H_k @ state.g_k)
@@ -103,6 +104,7 @@ def fmin_bfgs(func, x0, args=(), options=None):
         x_kp1 = state.x_k + s_k
         f_kp1 = line_search_results.f_k
         g_kp1 = line_search_results.g_k
+        # print(g_kp1)
         y_k = g_kp1 - state.g_k
         rho_k = jnp.reciprocal(y_k @ s_k)
 

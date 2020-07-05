@@ -1,0 +1,5 @@
+TEC_CONV = -8.4479745e6 # mTECU/Hz
+
+
+
+
