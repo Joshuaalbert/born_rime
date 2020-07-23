@@ -13,6 +13,7 @@ class LineSearchResults(NamedTuple):
     a_k: float  # Step size
     f_k: jnp.ndarray  # Final function value
     g_k: jnp.ndarray  # Final gradient value
+    status: int #int giving end status
 
 
 class BacktrackingState(NamedTuple):
@@ -311,7 +312,8 @@ def line_search(value_and_gradient, position, direction, old_fval=None, gfk=None
                                   ('a_star', float),
                                   ('phi_star', float),
                                   ('dphi_star', float),
-                                  ('g_star', jnp.ndarray)])
+                                  ('g_star', jnp.ndarray),
+                                  ('saddle_point', bool)])
     if old_fval is None or gfk is None:
         phi_0, dphi_0, gfk = restricted_func_and_grad(0.)
     else:
@@ -337,7 +339,8 @@ def line_search(value_and_gradient, position, direction, old_fval=None, gfk=None
                             a_star=0.,
                             phi_star=phi_0,
                             dphi_star=dphi_0,
-                            g_star=gfk)
+                            g_star=gfk,
+                            saddle_point=False)
 
     def body(state):
         # no amax in this version, we just double as in scipy.
@@ -345,7 +348,8 @@ def line_search(value_and_gradient, position, direction, old_fval=None, gfk=None
         a_i = jnp.where(state.i == 1, 1., state.a_i1 * 2.)
         # if a_i <= 0 then something went wrong. In practice any really small step length is a failure.
         # Likely means the search direction is not good, perhaps we are at a saddle point.
-        state = state._replace(failed=a_i < 1e-5)
+        saddle_point = a_i < 1e-5
+        state = state._replace(failed=saddle_point, saddle_point=saddle_point)
 
         phi_i, dphi_i, g_i = restricted_func_and_grad(a_i)
         state = state._replace(nfev=state.nfev + 1,
@@ -422,5 +426,11 @@ def line_search(value_and_gradient, position, direction, old_fval=None, gfk=None
                                 k=state.i,
                                 a_k=state.a_star,
                                 f_k=state.phi_star,
-                                g_k=state.g_star)
+                                g_k=state.g_star,
+                                status=jnp.where(state.failed & (~state.saddle_point), jnp.array(1),#zoom failed
+                                                 jnp.where(state.failed & state.saddle_point, jnp.array(2),#saddle point reached,
+                                                           jnp.where(state.i > maxiter, jnp.array(3),#max ls iter reached
+                                                                     jnp.array(0)#passed (should be)
+                                                                     )
+                                                           )))
     return results

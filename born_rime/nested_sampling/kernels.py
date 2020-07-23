@@ -135,9 +135,9 @@ def constrained_velocity_verlet(potential_fn, kinetic_fn, constraint_fn):
         :return: new state for the integrator.
         """
         z, r, _, z_grad = state
-        r = tree_multimap(lambda r, z_grad: r - 0.5 * step_size * z_grad, r, z_grad)  # r(n+1/2)
+        r = tree_multimap(lambda r, z_grad: r - 0.5 * step_size * z_grad, r, z_grad)  # r(num_parent+1/2)
         r_grad = grad(kinetic_fn, argnums=1)(inverse_mass_matrix, r)
-        z = tree_multimap(lambda z, r_grad: z + step_size * r_grad, z, r_grad)  # z(n+1)
+        z = tree_multimap(lambda z, r_grad: z + step_size * r_grad, z, r_grad)  # z(num_parent+1)
         potential_energy, z_grad = value_and_grad(potential_fn)(z)
 
         def do_bounce(r, z):
@@ -150,7 +150,7 @@ def constrained_velocity_verlet(potential_fn, kinetic_fn, constraint_fn):
 
             r = tree_multimap(_apply, r, grad_C, z_grad)
 
-        r = tree_multimap(lambda r, z_grad: r - 0.5 * step_size * z_grad, r, z_grad)  # r(n+1)
+        r = tree_multimap(lambda r, z_grad: r - 0.5 * step_size * z_grad, r, z_grad)  # r(num_parent+1)
         return IntegratorState(z, r, potential_energy, z_grad)
 
     def update_fn(step_size, inverse_mass_matrix, state):
@@ -164,12 +164,12 @@ def constrained_velocity_verlet(potential_fn, kinetic_fn, constraint_fn):
         no_bounce_state = no_bounce_update_fn(step_size, inverse_mass_matrix, state)
         z, r, potential_energy, z_grad = no_bounce_state
 
-        # r = tree_multimap(lambda r, z_grad: r - 0.5 * step_size * z_grad, r, z_grad)  # r(n+1/2)
+        # r = tree_multimap(lambda r, z_grad: r - 0.5 * step_size * z_grad, r, z_grad)  # r(num_parent+1/2)
         # r_grad = grad(kinetic_fn, argnums=1)(inverse_mass_matrix, r)
         #
         #
         #
-        # z = tree_multimap(lambda z, r_grad: z + step_size * r_grad, z, r_grad)  # z(n+1)
+        # z = tree_multimap(lambda z, r_grad: z + step_size * r_grad, z, r_grad)  # z(num_parent+1)
 
 
         C = constraint_fn(z)
@@ -189,7 +189,7 @@ def constrained_velocity_verlet(potential_fn, kinetic_fn, constraint_fn):
         bounce_state = no_bounce_state._replace(r=r, potential_energy=-jnp.inf)
 
         # potential_energy, z_grad = value_and_grad(potential_fn)(z)
-        # r = tree_multimap(lambda r, z_grad: r - 0.5 * step_size * z_grad, r, z_grad)  # r(n+1)
+        # r = tree_multimap(lambda r, z_grad: r - 0.5 * step_size * z_grad, r, z_grad)  # r(num_parent+1)
 
         return bounce_state
 

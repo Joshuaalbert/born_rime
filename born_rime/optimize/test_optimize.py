@@ -66,7 +66,7 @@ class TestLineSearch(object):
         dp = -10 * jnp.cos(10 * s)
         return p, dp
 
-    # -- n-d functions
+    # -- num_parent-d functions
 
     def _line_func_1(self, x):
         self.fcount += 1
@@ -194,7 +194,7 @@ class TestLineSearch(object):
         def f(x):
             return np.cos(np.sum(np.exp(-x)) ** 2)
 
-        # assert not line_search(jax.value_and_grad(f), np.ones(2), np.array([-0.5, -0.25])).failed
+        # assert not line_search(jax.value_and_grad(f), num_per_cluster.ones(2), num_per_cluster.array([-0.5, -0.25])).failed
         xk = np.ones(2)
         pk = np.array([-0.5, -0.25])
         res = line_search(jax.value_and_grad(f), xk, pk, maxiter=100)

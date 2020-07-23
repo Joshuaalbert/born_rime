@@ -6,33 +6,20 @@ import jax
 import jax.numpy as jnp
 from jax.lax import while_loop
 from .line_search import line_search
-from typing import NamedTuple, Optional
+from .bfgs_minimize import BFGSResults
+from typing import NamedTuple, Optional, Tuple
 
 
-class BFGSResults(NamedTuple):
-    converged: bool  # bool, True if minimization converges
-    failed: bool  # bool, True if line search fails
-    k: int  # The number of iterations of the BFGS update.
-    nfev: int  # The total number of objective evaluations performed.
-    ngev: int  # total number of jacobian evaluations
-    nhev: int  # total number of hessian evaluations
-    x_k: jnp.ndarray  # A tensor containing the last argument value found during the search. If the search converged,
-    # then this value is the argmin of the objective function.
-    f_k: jnp.ndarray  # A tensor containing the value of the objective
-    # function at the `position`. If the search
-    # converged, then this is the (local) minimum of
-    # the objective function.
-    g_k: jnp.ndarray  # A tensor containing the gradient of the objective function at the `final_position`.
-    # If the search converged the l2-norm of this tensor should be below the tolerance.
-    H_k: jnp.ndarray  # A tensor containing the inverse of the estimated Hessian.
-    status: int #int describing end state
-    ls_status: int #int describing ls end state (only means something if ls fails)
-
-
-def fmin_bfgs(func, x0, args=(), options=None):
+def fmin_b_bfgs(func, x0, args=(), options=None):
     """
     The BFGS algorithm from
         Algorithm 6.1 from Wright and Nocedal, 'Numerical Optimization', 1999, pg. 136-143
+
+    with bounded parameters, using the active set approach from,
+        Byrd, R. H., Lu, P., Nocedal, J., & Zhu, C. (1995).
+        'A Limited Memory Algorithm for Bound Constrained Optimization.'
+         SIAM Journal on Scientific Computing, 16(5), 1190–1208.
+         doi:10.1137/0916069
 
         Notes:
             We utilise boolean arithmetic to avoid jax.cond calls which don't work on accelerators.
@@ -55,6 +42,10 @@ def fmin_bfgs(func, x0, args=(), options=None):
                 Terminates minimization when |grad|_norm < g_tol
             ls_maxiter: int
                 Maximum number of linesearch iterations
+            bounds: 2-tuple of two vectors specifying the lower and upper bounds.
+                e.g. (l, u) where l and u have the same size as x0. For parameters x_i without constraints the
+                corresponding l_i=-jnp.inf and u_i=jnp.inf. Specifying l=None or u=None means no constraints on that
+                side.
 
     Returns: BFGSResults
 
@@ -66,6 +57,7 @@ def fmin_bfgs(func, x0, args=(), options=None):
     norm: float = options.get('norm', jnp.inf)
     gtol: float = options.get('gtol', 1e-5)
     ls_maxiter: int = options.get('ls_maxiter', 10)
+    bounds: Tuple[jnp.ndarray, jnp.ndarray] = tuple(options.get('bounds', (None, None)))
 
     state = BFGSResults(converged=False,
                         failed=False,
@@ -85,11 +77,31 @@ def fmin_bfgs(func, x0, args=(), options=None):
 
     d = x0.shape[0]
 
-    initial_H = jnp.eye(d)
-    initial_H = options.get('hess_inv', initial_H)
+    l = bounds[0]
+    u = bounds[1]
+    if l is None:
+        l = -jnp.inf * jnp.ones_like(x0)
+    if u is None:
+        u = jnp.inf * jnp.ones_like(x0)
+    l,u = jnp.where(l<u, l, u), jnp.where(l<u,u, l)
+
+    def project(x,l,u):
+        return jnp.clip(x,l, u)
+
+    def get_active_set(x, l, u):
+        return jnp.where((x==l) | (x==u))
 
     def func_with_args(x):
         return func(x, *args)
+
+    def get_generalised_Cauchy_point(xk, gk, l, u):
+        def func(t):
+            return func_with_args(project(xk - t* gk, l, u))
+
+    initial_H = jnp.eye(d)
+    initial_H = options.get('hess_inv', initial_H)
+
+
 
     value_and_grad = jax.value_and_grad(func_with_args)
 
@@ -135,9 +147,10 @@ def fmin_bfgs(func, x0, args=(), options=None):
         body,
         state)
 
-    state = state._replace(status=jnp.where(state.converged, jnp.array(0),#converged
-                                             jnp.where(state.k == maxiter, jnp.array(1),#max iters reached
-                                                       jnp.where(state.failed, jnp.array(2)+state.ls_status,#ls failed (+ reason)
-                                                                 jnp.array(-1)))))#undefined
+    state = state._replace(status=jnp.where(state.converged, jnp.array(0),  # converged
+                                            jnp.where(state.k == maxiter, jnp.array(1),  # max iters reached
+                                                      jnp.where(state.failed, jnp.array(2) + state.ls_status,
+                                                                # ls failed (+ reason)
+                                                                jnp.array(-1)))))  # undefined
 
     return state
