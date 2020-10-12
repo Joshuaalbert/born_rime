@@ -5,43 +5,12 @@ import astropy.constants as constants
 from astropy.units.quantity import Quantity
 from typing import List, Tuple
 import pylab as plt
-from mayavi import mlab
-from matplotlib.colorbar import ColorbarBase
+# from mayavi import mlab
+from born_rime.utils import _validate_type, _validate_unit_type
+from born_rime.plotting import add_colorbar
 
 Gauss = 1e-4 * au.T
 au.set_enabled_equivalencies(au.dimensionless_angles())
-
-
-def _validate_type(name, value, expected_type):
-    if not isinstance(value, expected_type):
-        raise TypeError("{name} should be {expected_type}, got {type}.".format(name=name, expected_type=expected_type,
-                                                                               type=type(value)))
-
-
-def _validate_unit_type(name, value, expected_unit):
-    _validate_type(name, value, Quantity)
-    if isinstance(expected_unit, Quantity):
-        expected_unit = expected_unit.unit
-    if au.get_physical_type(value.unit) != au.get_physical_type(expected_unit):
-        raise ValueError("{name} units should be {expected_unit}, got {type}.".format(name=name,
-                                                                                      expected_unit=au.get_physical_type(
-                                                                                          expected_unit),
-                                                                                      type=au.get_physical_type(
-                                                                                          value.unit)))
-
-
-def add_colorbar(mappable, label, ax=None):
-    from mpl_toolkits.axes_grid1 import make_axes_locatable
-    import matplotlib.pyplot as plt
-
-    last_axes = ax or plt.gca()
-    ax = mappable.axes
-    fig = ax.figure
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="5%", pad=0.05)
-    cbar = fig.colorbar(mappable, cax=cax, label=label)
-    plt.sca(last_axes)
-    return cbar
 
 
 class CartesianSpaceDomain(object):
@@ -603,7 +572,7 @@ def test_potential():
     space.build()
     print(space)
     fed_model = CosExp(height=200 * au.m, thickness=10 * au.m, period=5 * au.m, space_domain=space)
-    # fed_model = ThinCircularHole(height=200*au.m,thickness=10*au.m,diameter=1.*au.m,space_domain=space)
+    # fed_model = ThinCircularHole(height=200*au.corner_indices,thickness=10*au.corner_indices,diameter=1.*au.corner_indices,space_domain=space)
     fed_model.build()
     fed_model.plot()
     B_model = ConstantParallelB(space_domain=space)
@@ -703,21 +672,21 @@ def test_fourier():
     assert np.all(np.isclose(np.moveaxis(np.moveaxis(A, 1, -1), -1, 1), A))
     assert np.all(np.isclose(np.moveaxis(A[0, :, :], 0, -1), A[0, :, :].T))
 
-    # box = [Quantity([-10, 20.] * au.km), Quantity([-10, 10.] * au.km)]
+    # box = [Quantity([-10, 20.] * au.k0), Quantity([-10, 10.] * au.k0)]
     # shape = [31, 31]
     # space = CartesianSpaceDomain(box, shape)
     # space.build()
-    # H = np.exp(-0.5 * np.linalg.norm(space.space_grid, axis=0) ** 2 / (3 * au.km) ** 2)
+    # H = np.exp(-0.5 * np.linalg.norm(space.space_grid, axis=0) ** 2 / (3 * au.k0) ** 2)
     # fourier = FunctionFourier(space_domain=space)
     # fourier.build()
     # F = fourier.fourier_transform(H)
-    # assert F.unit == au.km ** 2
+    # assert F.unit == au.k0 ** 2
     # # plt.imshow(F.real)
     # # plt.colorbar()
     # # plt.show()
     #
     # k = np.linalg.norm(fourier.fourier_space.space_grid, axis=0)
-    # analytic = 2 * np.pi * (3 * au.km) ** 2 * np.exp(-2. * np.pi ** 2 * (3 * au.km) ** 2 * k ** 2)
+    # analytic = 2 * np.pi * (3 * au.k0) ** 2 * np.exp(-2. * np.pi ** 2 * (3 * au.k0) ** 2 * k ** 2)
     #
     # assert np.all(np.isclose(F.real, analytic.real, atol=1e-1))
     # # plt.imshow(analytic.real.value  - F.real.value)
@@ -932,8 +901,8 @@ def test_green():
     shape = [101, 101]
     space = CartesianSpaceDomain(box, shape)
     space.build()
-    # fed_model = CosExp(mean=1e12 / au.m ** 3, amp=1e11 / au.m ** 3, period=5 * au.km, height=100 * au.km,
-    #                    thickness=10 * au.km, space_domain=space)
+    # fed_model = CosExp(mean=1e12 / au.corner_indices ** 3, amp=1e11 / au.corner_indices ** 3, period=5 * au.k0, height=100 * au.k0,
+    #                    thickness=10 * au.k0, space_domain=space)
     fed_model = ThinCircularHole(diameter=1 * au.m, thickness=1 * au.m, height=200 * au.m, space_domain=space)
     fed_model.build()
     B_model = ConstantParallelB(space_domain=space)
@@ -1289,8 +1258,8 @@ def test_born_series():
     shape = [201, 51, 301]
     space = CartesianSpaceDomain(box, shape)
     space.build()
-    # fed_model = CosExp(mean=3e10/ au.m ** 3, amp=3e12 / au.m ** 3, period=50 * au.m, height=750 * au.m,
-    #                    thickness=30 * au.m, space_domain=space)
+    # fed_model = CosExp(mean=3e10/ au.corner_indices ** 3, amp=3e12 / au.corner_indices ** 3, period=50 * au.corner_indices, height=750 * au.corner_indices,
+    #                    thickness=30 * au.corner_indices, space_domain=space)
     fed_model = ThinCircularHole(diameter=21 * au.m, thickness=40 * au.m, height=750 * au.m, layer=4e12 / au.m ** 3,
                                  space_domain=space)
     fed_model.build()

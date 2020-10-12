@@ -1,4 +1,7 @@
 import numpy as np
+from astropy import units as au
+from astropy.units import Quantity
+
 
 def rolling_window(a, window, padding='same'):
     """
@@ -50,3 +53,23 @@ def test_rolling_window():
     print(rolling_window(a,3,padding='same'))
     print(rolling_window(a,3,padding='valid'))
     print(rolling_window(a, 3, padding='same').mean(-1))
+
+
+def _validate_type(name, value, expected_type):
+    if not isinstance(value, expected_type):
+        raise TypeError("{name} should be {expected_type}, got {type}.".format(name=name, expected_type=expected_type,
+                                                                               type=type(value)))
+
+
+def _validate_unit_type(name, value, expected_unit):
+    _validate_type(name, value, Quantity)
+    if isinstance(expected_unit, Quantity):
+        expected_unit = expected_unit.unit
+    if au.get_physical_type(value.unit) != au.get_physical_type(expected_unit):
+        raise ValueError("{name} units should be {expected_unit}, got {type}.".format(name=name,
+                                                                                      expected_unit=au.get_physical_type(
+                                                                                          expected_unit),
+                                                                                      type=au.get_physical_type(
+                                                                                          value.unit)))
+
+
