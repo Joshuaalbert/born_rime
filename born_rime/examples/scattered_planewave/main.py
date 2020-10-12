@@ -16,15 +16,15 @@ au.set_enabled_equivalencies(au.dimensionless_angles())
 def plot_E_s(arrays, x, y, x0, y0, corner_indices, save_name=None):
     figsize = 6
     fig, ax = plt.subplots(1, 1, figsize=(figsize, figsize))
-    arrays = [np.abs(E_s) for E_s in arrays]
+    arrays = [np.abs(E_s)/np.abs(E_s).mean() for E_s in arrays]
     vmin = min([E_s.min().value for E_s in arrays])
-    vmax = min([E_s.max().value for E_s in arrays])
+    vmax = max([E_s.max().value for E_s in arrays])
 
     norm = plt.Normalize(vmin, vmax)
     to_colour = lambda w: plt.cm.jet(norm(w))
 
     def _get_artists(artists, start):
-        _, img = plot_2d_image(arrays[start], x, y, title="E_s", corner_indices=corner_indices,
+        _, img = plot_2d_image(arrays[start], x, y, title="Scattered electric field", corner_indices=corner_indices,
                                colorizer=to_colour,ax=ax)
         sc = ax.scatter(x0[start].value, y0[start].value,c='green', label='source')
         ax.set_xlim(x.min().value, x.max().value)
@@ -40,7 +40,7 @@ def plot_E_s(arrays, x, y, x0, y0, corner_indices, save_name=None):
         artists = []
         artists = _get_artists(artists, start)
         mappable = plt.cm.ScalarMappable(norm=norm, cmap=plt.cm.jet)
-        add_colorbar(mappable, label='electric field amplitude [{}]'.format(arrays[0].unit), ax=ax)
+        add_colorbar(mappable, label='rel. electric field amplitude [{}]'.format(arrays[0].unit), ax=ax)
         return artists
 
     def update(start):
@@ -53,9 +53,9 @@ def plot_E_s(arrays, x, y, x0, y0, corner_indices, save_name=None):
                         frames=range(1, len(arrays)),
                         init_func=init, blit=True)
 
-    ani.save(save_name, fps=3.)#len(arrays) / 6.)
+    ani.save(save_name, fps=5.)#len(arrays) / 6.)
 
-def test_plot():
+def _test_plot():
     arrays = [np.random.uniform(size=(100,100)) for i in range(50)]
     x = np.random.uniform(size=100)
     y = np.random.uniform(size=100)
@@ -105,9 +105,9 @@ def main():
     E_s = []
     x0 = []
     z0 = []
-    for i in range(50):
-        _x0 = x_medium.min() + (x_medium.max() - x_medium.min())*np.sin(i/50.*np.pi/1.2)
-        _z0 = z_medium.min() + (z_medium.max() - z_medium.min())*i/50.
+    for i in range(100):
+        _x0 = x_medium.min() + (x_medium.max() - x_medium.min())*np.sin(i/100.*np.pi/1.2)
+        _z0 = z_medium.min() + (z_medium.max() - z_medium.min())*i/100.
         E_s.append(simulate_E_s(_x0, _z0, X, Z, k02, k2, x, z, g))
         x0.append(_x0)
         z0.append(_z0)
@@ -141,7 +141,7 @@ def simulate_E_s(x0, z0, X, Z, k02, k2, x, z, g):
     R = np.sqrt((X - x0) ** 2 + (Z - z0) ** 2)
     E_i = np.exp(1j * np.sqrt(k02) * R) / (1 * au.m ** 2 + R ** 2)
     t0 = default_timer()
-    E_born, results = born_series(E_i, g, k2, k02, x, z, N=3, pad=300)
+    E_born, results = born_series(E_i, g, k2, k02, x, z, N=4, pad=300)
     print(x0, z0, default_timer() - t0)
     return results['E_s'][-1]
 
